@@ -32,7 +32,7 @@ int main() {
   a = add(1, 2.0);
   std::cout << a << std::endl;
   
-  a = add(1.0, 2, 5.0);
+  a = add(1.0, 2, a);
   std::cout << a << std::endl;
 
   return 0;

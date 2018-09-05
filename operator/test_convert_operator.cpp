@@ -26,5 +26,7 @@ int main() {
   t = 10;
   std::cout << int(t) << std::endl;
   std::cout << std::string(t) << std::endl;
+  int int_t = t;
+  std::cout << int_t << std::endl;
   return 0;
 }
