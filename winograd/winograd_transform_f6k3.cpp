@@ -67,20 +67,15 @@ void winograd_transform_input<8, 3>(const framework::Tensor &input,
   int channel = input.dims()[1];
   int height = input.dims()[2];
   int width = input.dims()[3];
-//  int h_tiles = (height + 5 - 2) / 6;
-//  int w_tiles = (width + 5 - 2) / 6;
-  int h_tiles = (height + 5) / 6;
-  int w_tiles = (width + 5) / 6;
+  int h_tiles = (height + 5 - 2) / 6;
+  int w_tiles = (width + 5 - 2) / 6;
+//  int h_tiles = (height + 5) / 6;
+//  int w_tiles = (width + 5) / 6;
   framework::DDim transformed_shape = framework::make_ddim(
           std::vector<int>{channel, h_tiles, w_tiles, 64});
   float *outptr = output->mutable_data<float>(transformed_shape);
   memset(outptr, 0, channel * h_tiles * w_tiles * 64 * sizeof(float));
   const float *inptr = input.data<float>();
-  DLOG << "channel: " << channel << ", "
-       << "height: " << height << ", "
-       << "width: " << width << ", "
-       << "h_tiles: " << h_tiles << ", "
-       << "w_tiles: " << w_tiles;
   // pack input to tiles
   for (int c = 0; c < channel; ++c) {
     int inter_h = (height - 2) / 6;
@@ -89,8 +84,6 @@ void winograd_transform_input<8, 3>(const framework::Tensor &input,
 //    int inter_w = width / 6;
     int remain_h = height - (inter_h * 6);
     int remain_w = width - (inter_w * 6);
-    DLOG << "inter_h = " << inter_h << ", inter_w = " << inter_w
-         << ", remain_h = " << remain_h << ", remain_w = " << remain_w;
     const float *in0 = inptr + c * height * width;
     const float *in1 = in0 + width;
     const float *in2 = in1 + width;
@@ -122,7 +115,7 @@ void winograd_transform_input<8, 3>(const framework::Tensor &input,
         out += 64;
       }
       // remain width
-      if (remain_w > 0) {
+      if (remain_w > 2) {
         memcpy(out, in0,  remain_w * sizeof(float));
         memcpy(out + 8, in1,  remain_w * sizeof(float));
         memcpy(out + 16, in2,  remain_w * sizeof(float));
@@ -131,27 +124,19 @@ void winograd_transform_input<8, 3>(const framework::Tensor &input,
         memcpy(out + 40, in5,  remain_w * sizeof(float));
         memcpy(out + 48, in6,  remain_w * sizeof(float));
         memcpy(out + 56, in7,  remain_w * sizeof(float));
-        in0 += remain_w;
-        in1 += remain_w;
-        in2 += remain_w;
-        in3 += remain_w;
-        in4 += remain_w;
-        in5 += remain_w;
-        in6 += remain_w;
-        in7 += remain_w;
         out += 64;
       }
-      in0 += 5 * width;
-      in1 += 5 * width;
-      in2 += 5 * width;
-      in3 += 5 * width;
-      in4 += 5 * width;
-      in5 += 5 * width;
-      in6 += 5 * width;
-      in7 += 5 * width;
+      in0 += 5 * width + remain_w;
+      in1 += 5 * width + remain_w;
+      in2 += 5 * width + remain_w;
+      in3 += 5 * width + remain_w;
+      in4 += 5 * width + remain_w;
+      in5 += 5 * width + remain_w;
+      in6 += 5 * width + remain_w;
+      in7 += 5 * width + remain_w;
     }
     // remain height
-    if (remain_h > 0) {
+    if (remain_h > 2) {
       for (int w = 0; w < inter_w; ++w) {
         for (int rh = 0; rh < remain_h; ++rh) {
           memcpy(out + rh * 8, in0 + rh * width, 8 * sizeof(float));
@@ -160,7 +145,7 @@ void winograd_transform_input<8, 3>(const framework::Tensor &input,
         in0 += 6;
       }
       // remain width
-      if (remain_w > 0) {
+      if (remain_w > 2) {
         for (int rh = 0; rh < remain_h; ++rh) {
           memcpy(out + rh * 8, in0 + rh * width, remain_w * sizeof(float));
         }
@@ -287,9 +272,6 @@ void winograd_transform_output<8, 3>(const framework::Tensor &input,
     int inter_w = out_w / 6;
     int remain_h = out_h - inter_h * 6;
     int remain_w = out_w - inter_w * 6;
-    DLOG << "out_h = " << out_h << ", out_w = " << out_w;
-    DLOG << "remain_h = " << remain_h << ", remain_w = " << remain_w;
-    DLOG << "h_tiles = " << h_tiles << ", w_tiles = " << w_tiles;
 
     float *out_ptr0 = output_ptr + oc * out_h * out_w;
     float *out_ptr1 = out_ptr0 + out_w;
