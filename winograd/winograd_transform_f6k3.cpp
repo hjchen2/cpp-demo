@@ -21,13 +21,6 @@ namespace paddle_mobile {
 namespace operators {
 namespace math {
 
-static float weight_transform_matrix[8][3] = {
-  {1.f, 0.f, 0.f}, {-2.f/9, -2.f/9, -2.f/9},
-  {-2.f/9, 2.f/9, -2.f/9}, {1.f/90, 1.f/45, 2.f/45},
-  {1.f/90, -1.f/45, 2.f/45}, {32.f/45, 16.f/45, 8.f/45},
-  {32.f/45, -16.f/45, 8.f/45}, {0.f, 0.f, 1.f}
-};
-
 template<>
 void winograd_transform_weight<8, 3>(const framework::Tensor &weight,
                                      framework::Tensor *output) {
@@ -46,15 +39,39 @@ void winograd_transform_weight<8, 3>(const framework::Tensor &weight,
       float *kout = outptr + offset * 64;
       const float *k = inptr + offset * 9;
       float gw[8][3];
-      for (int i = 0; i < 8; ++i) {
-        gw[i][0] = trans[i][0] * k[0] + trans[i][1] * k[3] + trans[i][2] * k[6];
-        gw[i][1] = trans[i][0] * k[1] + trans[i][1] * k[4] + trans[i][2] * k[7];
-        gw[i][2] = trans[i][0] * k[2] + trans[i][1] * k[5] + trans[i][2] * k[8];
+      for (int i = 0; i < 3; ++i) {
+        float k0 = k[i];
+        float k1 = k[3 + i];
+        float k2 = k[6 + i];
+        float d0 = k0 + k2;
+        float d1 = k0 + 4 * k2;
+        float d2 = 4 * k0 + k2;
+        float d3 = 2 * k1;
+        gw[0][i] = k0;
+        gw[1][i] = -2.f/9 * (d0 + k1);  // -2.f/9 * (k0 + k1 + k2)
+        gw[2][i] = -2.f/9 * (d0 - k1);  // -2.f/9 * (k0 - k1 + k2)
+        gw[3][i] = 1.f/90 * (d1 + d3);  // 1.f/90 * (k0 + 2 * k1 + 4 * k2)
+        gw[4][i] = 1.f/90 * (d1 - d3);  // 1.f/90 * (k0 - 2 * k1 + 4 * k2)
+        gw[5][i] = 8.f/45 * (d2 + d3);  // 8.f/45 * (4 * k0 + 2 * k1 + k2)
+        gw[6][i] = 8.f/45 * (d2 - d3);  // 8.f/45 * (4 * k0 - 2 * k1 + k2)
+        gw[7][i] = k2;
       }
-      for (int i = 0; i < 8; ++i) {
-        for (int j = 0; j < 8; ++j, ++kout) {
-          *kout = gw[i][0] * trans[j][0] + gw[i][1] * trans[j][1] + gw[i][2] * trans[j][2];
-        }
+      for (int i = 0; i < 8; ++i, kout += 8) {
+        float k0 = gw[i][0];
+        float k1 = gw[i][1];
+        float k2 = gw[i][2];
+        float d0 = k0 + k2;
+        float d1 = k0 + 4 * k2;
+        float d2 = 4 * k0 + k2;
+        float d3 = 2 * k1;
+        kout[0] = gw[i][0];
+        kout[1] = -2.f/9 * (d0 + k1);  // -2.f/9 * (k0 + k1 + k2)
+        kout[2] = -2.f/9 * (d0 - k1);  // -2.f/9 * (k0 - k1 + k2)
+        kout[3] = 1.f/90 * (d1 + d3);  // 1.f/90 * (k0 + 2 * k1 + 4 * k2)
+        kout[4] = 1.f/90 * (d1 - d3);  // 1.f/90 * (k0 - 2 * k1 + 4 * k2)
+        kout[5] = 8.f/45 * (d2 + d3);  // 8.f/45 * (4 * k0 + 2 * k1 + k2)
+        kout[6] = 8.f/45 * (d2 - d3);  // 8.f/45 * (4 * k0 - 2 * k1 + k2)
+        kout[7] = gw[i][2];
       }
     }
   }
@@ -63,14 +80,12 @@ void winograd_transform_weight<8, 3>(const framework::Tensor &weight,
 template<>
 void winograd_transform_input<8, 3>(const framework::Tensor &input,
                                     framework::Tensor *output) {
-  // transform input to [c, roundup(h/6), roundup(w/6), 64] tiles
+  // tile input to [c, roundup(h/6), roundup(w/6), 64] and do transformation
   int channel = input.dims()[1];
   int height = input.dims()[2];
   int width = input.dims()[3];
-  int h_tiles = (height + 5 - 2) / 6;
-  int w_tiles = (width + 5 - 2) / 6;
-//  int h_tiles = (height + 5) / 6;
-//  int w_tiles = (width + 5) / 6;
+  int h_tiles = (height + 3) / 6; // (height + 5 - 2) / 6
+  int w_tiles = (width + 3) / 6;  // (width + 5 - 2) / 6
   framework::DDim transformed_shape = framework::make_ddim(
           std::vector<int>{channel, h_tiles, w_tiles, 64});
   float *outptr = output->mutable_data<float>(transformed_shape);
@@ -80,8 +95,6 @@ void winograd_transform_input<8, 3>(const framework::Tensor &input,
   for (int c = 0; c < channel; ++c) {
     int inter_h = (height - 2) / 6;
     int inter_w = (width - 2) / 6;
-//    int inter_h = height / 6;
-//    int inter_w = width / 6;
     int remain_h = height - (inter_h * 6);
     int remain_w = width - (inter_w * 6);
     const float *in0 = inptr + c * height * width;
