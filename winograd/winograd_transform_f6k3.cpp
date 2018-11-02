@@ -32,7 +32,6 @@ void winograd_transform_weight<8, 3>(const framework::Tensor &weight,
           std::vector<int>{out_channel, in_channel, 64});
   float *outptr = output->mutable_data<float>(transformed_shape);
   const float *inptr = weight.data<float>();
-  const float (*trans)[3] = weight_transform_matrix;
   for (int oc = 0; oc < out_channel; ++oc) {
     for (int ic = 0; ic < in_channel; ++ic) {
       size_t offset = oc * in_channel + ic;
@@ -172,41 +171,67 @@ void winograd_transform_input<8, 3>(const framework::Tensor &input,
       // compute B_T * d(c, b)
       float bd[8][8];
       for (int i = 0; i < 8; ++i) {
-        // bd[0][i] = d[0][i] + (-21/4) * d[2][i] + (21/4) * d[4][i] + (-1) * d[6][i]
-        bd[0][i] = out[i] - 5.25 * out[16 + i] + 5.25 * out[32 + i] - out[48 + i];
-        // bd[1][i] = d[1][i] + d[2][i] + (-17/4) * d[3][i] + (-17/4) * d[4][i] + d[5][i] + d[6][i]
-        bd[1][i] = out[8 + i] + out[16 + i] - 4.25 * out[24 + i] - 4.25 * out[32 + i] + out[40 + i] + out[48 + i];
-        // bd[2][i] = (-1) * d[1][i] + d[2][i] + (17/4) * d[3][i] + (-17/4) * d[4][i] + (-1) * d[5][i] + d[6][i]
-        bd[2][i] = -1.0 * out[8 + i] + out[16 + i] + 4.25 * out[24 + i] - 4.25 * out[32 + i] - out[40 + i] + out[48 + i];
-        // bd[3][i] = (1/2) * d[1][i] + (1/4) * d[2][i] + (-5/2) * d[3][i] + (-5/4) * d[4][i] + 2 * d[5][i] + d[6][i]
-        bd[3][i] = 0.5 * out[8 + i] + 0.25 * out[16 + i] + (-2.5) * out[24 + i] + (-1.25) * out[32 + i] + 2 * out[40 + i] + out[48 + i];
-        // bd[4][i] = (-1/2) * d[1][i] + (1/4) * d[2][i] + (5/2) * d[3][i] + (-5/4) * d[4][i] + (-2) * d[5][i] + d[6][i]
-        bd[4][i] = -0.5 * out[8 + i] + 0.25 * out[16 + i] + 2.5 * out[24 + i] - 1.25 * out[32 + i] - 2 * out[40 + i] + out[48 + i];
-        // bd[5][i] = 2 * d[1][i] + 4 * d[2][i] + (-5/2) * d[3][i] + (-5) * d[4][i] + (1/2) * d[5][i] + d[6][i]
-        bd[5][i] = 2 * out[8 + i] + 4 * out[16 + i] - 2.5 * out[24 + i] - 5 * out[32 + i] + 0.5 * out[40 + i] + out[48 + i];
-        // bd[6][i] = -2 * d[1][i] + 4 * d[2][i] + (5/2) * d[3][i] + (-5) * d[4][i] + (-1/2) * d[5][i] + d[6][i]
-        bd[6][i] = -2 * out[8 + i] + 4 * out[16 + i] + 2.5 * out[24 + i] - 5 * out[32 + i] - 0.5 * out[40 + i] + out[48 + i];
-        // bd[7][i] = (-1) * d[1][i] + (21/4) * d[3][i] + (-21/4) * d[5][i] + d[7][i]
-        bd[7][i] = -1.0 * out[8 + i] + 5.25 * out[24 + i] - 5.25 * out[40 + i] + out[56 + i];
+        float d0 = out[i];
+        float d1 = out[8 + i];
+        float d2 = out[16 + i];
+        float d3 = out[24 + i];
+        float d4 = out[32 + i];
+        float d5 = out[40 + i];
+        float d6 = out[48 + i];
+        float d7 = out[56 + i];
+
+        bd[0][i] = d0 - d6 + (d4 - d2) * 5.25;
+        float v1 = d2 - 4.25 * d4 + d6;
+        float v2 = d1 - 4.25 * d3 + d5;
+        // d1 + d2 - 4.25 * d3 - 4.25 * d4 + d5 + d6
+        bd[1][i] = v1 + v2;
+        // -d1 + d2 + 4.25 * d3 - 4.25 * d4 - d5 + d6
+        bd[2][i] = v1 - v2;
+        v1 = 0.25 * d2 - 1.25 * d4 + d6;
+        v2 = 0.5 * d1 - 2.5 * d3 + 2 * d5;
+        // 0.5 * d1 + 0.25 * d2 - 2.5 * d3 - 1.25 * d4 + 2 * d5 + d6
+        bd[3][i] = v1 + v2;
+        // -0.5 * d1 + 0.25 * d2 + 2.5 * d3 - 1.25 * d4 - 2 * d5 + d6
+        bd[4][i] = v1 - v2;
+        v1 = 4 * d2 - 5 * d4 + d6;
+        v2 = 2 * d1 - 2.5 * d3 + 0.5 * d5;
+        // 2 * d1 + 4 * d2 - 2.5 * d3 - 5 * d4 + 0.5 * d5 + d6
+        bd[5][i] = v1 + v2;
+        // -2 * d1 + 4 * d2 + 2.5 * d3 - 5 * d4 - 0.5 * d5 + d6
+        bd[6][i] = v1 - v2;
+        bd[7][i] = d7 - d1 + (d3 - d5) * 5.25;
       }
       // compute B_T * d(c, b) * B
-      for (int i = 0; i < 8; ++i) {
-        // out[i][0] = bd[i][0] + (-21/4) * bd[i][2] + (21/4) * bd[i][4] + (-1) * bd[i][6]
-        out[i * 8 + 0] = bd[i][0] - 5.25 * bd[i][2] + 5.25 * bd[i][4] - bd[i][6];
-        // out[i][0] = bd[i][1] + bd[i][2] + (-17/4) * bd[i][3] + (-17/4) * bd[i][4] + bd[i][5] + bd[i][6]
-        out[i * 8 + 1] = bd[i][1] + bd[i][2] - 4.25 * bd[i][3] - 4.25 * bd[i][4] + bd[i][5] + bd[i][6];
-        // out[i][2] = (-1) * bd[i][1] + bd[i][2] + (17/4) * bd[i][3] + (-17/4) * bd[i][4] + (-1) * bd[i][5] + bd[i][6]
-        out[i * 8 + 2] = -1.0 * bd[i][1] + bd[i][2] + 4.25 * bd[i][3] - 4.25 * bd[i][4] - bd[i][5] + bd[i][6];
-        // out[i][3] = (1/2) * d[i][1] + (1/4) * bd[i][2] + (-5/2) * bd[i][3] + (-5/4) * bd[i][4] + 2 * bd[i][5] + bd[i][6]
-        out[i * 8 + 3] = 0.5 * bd[i][1] + 0.25 * bd[i][2] - 2.5 * bd[i][3] - 1.25 * bd[i][4] + 2 * bd[i][5] + bd[i][6];
-        // out[i][4] = (-1/2) * bd[i][1] + (1/4) * bd[i][2] + (5/2) * bd[i][3] + (-5/4) * bd[i][4] + (-2) * bd[i][5] + bd[i][6]
-        out[i * 8 + 4] = -0.5 * bd[i][1] + 0.25 * bd[i][2] + 2.5 * bd[i][3] - 1.25 * bd[i][4] - 2 * bd[i][5] + bd[i][6];
-        // out[i][5] = 2 * bd[i][1] + 4 * bd[i][2] + (-5/2) * bd[i][3] + (-5) * bd[i][4] + (1/2) * bd[i][5] + bd[i][6]
-        out[i * 8 + 5] = 2 * bd[i][1] + 4 * bd[i][2] - 2.5 * bd[i][3] - 5 * bd[i][4] + 0.5 * bd[i][5] + bd[i][6];
-        // out[i][6] = -2 * bd[i][1] + 4 * bd[i][2] + (5/2) * bd[i][3] + (-5) * bd[i][4] + (-1/2) * bd[i][5] + bd[i][6]
-        out[i * 8 + 6] = -2 * bd[i][1] + 4 * bd[i][2] + 2.5 * bd[i][3] - 5 * bd[i][4] - 0.5 * bd[i][5] + bd[i][6];
-        // out[i][7] = (-1) * bd[i][1] + (21/4) * bd[i][3] + (-21/4) * bd[i][5] + bd[i][7]
-        out[i * 8 + 7] = -1.0 * bd[i][1] + 5.25 * bd[i][3] - 5.25 * bd[i][5] + bd[i][7];
+      for (int i = 0; i < 8; ++i, out += 8) {
+        float d0 = bd[i][0];
+        float d1 = bd[i][1];
+        float d2 = bd[i][2];
+        float d3 = bd[i][3];
+        float d4 = bd[i][4];
+        float d5 = bd[i][5];
+        float d6 = bd[i][6];
+        float d7 = bd[i][7];
+
+        out[0] = d0 - d6 + (d4 - d2) * 5.25;
+        float v1 = d2 - 4.25 * d4 + d6;
+        float v2 = d1 - 4.25 * d3 + d5;
+        // d1 + d2 - 4.25 * d3 - 4.25 * d4 + d5 + d6
+        out[1] = v1 + v2;
+        // -d1 + d2 + 4.25 * d3 - 4.25 * d4 - d5 + d6
+        out[2] = v1 - v2;
+        v1 = 0.25 * d2 - 1.25 * d4 + d6;
+        v2 = 0.5 * d1 - 2.5 * d3 + 2 * d5;
+        // 0.5 * d1 + 0.25 * d2 - 2.5 * d3 - 1.25 * d4 + 2 * d5 + d6
+        out[3] = v1 + v2;
+        // -0.5 * d1 + 0.25 * d2 + 2.5 * d3 - 1.25 * d4 - 2 * d5 + d6
+        out[4] = v1 - v2;
+        v1 = 4 * d2 - 5 * d4 + d6;
+        v2 = 2 * d1 - 2.5 * d3 + 0.5 * d5;
+        // 2 * d1 + 4 * d2 - 2.5 * d3 - 5 * d4 + 0.5 * d5 + d6
+        out[5] = v1 + v2;
+        // -2 * d1 + 4 * d2 + 2.5 * d3 - 5 * d4 - 0.5 * d5 + d6
+        out[6] = v1 - v2;
+        out[7] = d7 - d1 + (d3 - d5) * 5.25;
       }
     }
   }
@@ -251,27 +276,51 @@ void winograd_transform_output<8, 3>(const framework::Tensor &input,
       // compute A_T * m
       float am[6][8];
       for (int i = 0; i < 8; ++i) {
-        // am[0][i] = m[0][i] + m[1][i] + m[2][i] + m[3][i] + m[4][i] + m[5][i] + m[6][i]
-        am[0][i] = m[i] + m[8 + i] +  m[16 + i] +  m[24 + i] +  m[32 + i] +  m[40 + i] +  m[48 + i];
-        // am[1][i] = m[1][i] - m[2][i] + 2 * m[3][i] - 2 * m[4][i] + 0.5 * m[5][i] - 0.5 * m[6][i]
-        am[1][i] = m[8 + i] - m[16 + i] + 2 * m[24 + i] - 2 * m[32 + i] + 0.5 * m[40 + i] - 0.5 * m[48 + i];
-        // am[2][i] = m[1][i] + m[2][i] + 4 * m[3][i] + 4 * m[4][i] + 0.25 * m[5][i] + 0.25 * m[6][i]
-        am[2][i] = m[8 + i] + m[16 + i] + 4 * m[24 + i] + 4 * m[32 + i] + 0.25 * m[40 + i] + 0.25 * m[48 + i];
-        // am[3][i] = m[1][i] - m[2][i] + 8 * m[3][i] - 8 * m[4][i] + 0.125 * m[5][i] - 0.125 * m[6][i]
-        am[3][i] = m[8 + i] - m[16 + i] + 8 * m[24 + i] - 8 * m[32 + i] + 0.125 * m[40 + i] - 0.125 * m[48 + i];
-        // am[4][i] = m[1][i] + m[2][i] + 16 * m[3][i] + 16 * m[4][i] + 0.0625 * m[5][i] + 0.0625 * m[6][i]
-        am[4][i] = m[8 + i] + m[16 + i] + 16 * m[24 + i] + 16 * m[32 + i] + 0.0625 * m[40 + i] + 0.0625 * m[48 + i];
-        // am[5][i] = m[1][i] - m[2][i] + 32 * m[3][i] - 32 * m[4][i] + 0.03125 * m[5][i] - 0.03125 * m[6][i] + m[7][i]
-        am[5][i] = m[8 + i] - m[16 + i] + 32 * m[24 + i] - 32 * m[32 + i] + 0.03125 * m[40 + i] - 0.03125 * m[48 + i] + m[56 + i];
+        float d0 = m[i];
+        float d1 = m[8 + i];
+        float d2 = m[16 + i];
+        float d3 = m[24 + i];
+        float d4 = m[32 + i];
+        float d5 = m[40 + i];
+        float d6 = m[48 + i];
+        float d7 = m[56 + i];
+        float v0 = d1 + d2;
+        float v1 = d1 - d2;
+        float v2 = d3 + d4;
+        float v3 = d3 - d4;
+        float v4 = d5 + d6;
+        float v5 = d5 - d6;
+
+        am[0][i] = d0 + v0 + v2 + v4;
+        am[1][i] = v1 + 2 * v3 + 0.5 * v5;
+        am[2][i] = v0 + 4 * v2 + 0.25 * v4;
+        am[3][i] = v1 + 8 * v3 + 0.125 * v5;
+        am[4][i] = v0 + 16 * v2 + 0.0625 * v4;
+        am[5][i] = v1 + 32 * v3 + 0.03125 * v5 + d7;
       }
       // compute A_T * m * A
-      for (int i = 0; i < 6; ++i) {
-        m[i * 8] = am[i][0] + am[i][1] + am[i][2] + am[i][3] + am[i][4] + am[i][5] + am[i][6];
-        m[i * 8 + 1] = am[i][1] - am[i][2] + 2 * am[i][3] - 2 * am[i][4] + 0.5 * am[i][5] - 0.5 * am[i][6];
-        m[i * 8 + 2] = am[i][1] + am[i][2] + 4 * am[i][3] + 4 * am[i][4] + 0.25 * am[i][5] + 0.25 * am[i][6];
-        m[i * 8 + 3] = am[i][1] - am[i][2] + 8 * am[i][3] - 8 * am[i][4] + 0.125 * am[i][5] - 0.125 * am[i][6];
-        m[i * 8 + 4] = am[i][1] + am[i][2] + 16 * am[i][3] + 16 * am[i][4] + 0.0625 * am[i][5] + 0.0625 * am[i][6];
-        m[i * 8 + 5] = am[i][1] - am[i][2] + 32 * am[i][3] - 32 * am[i][4] + 0.03125 * am[i][5] - 0.03125 * am[i][6] + am[i][7];
+      for (int i = 0; i < 6; ++i, m += 8) {
+        float d0 = am[i][0];
+        float d1 = am[i][1];
+        float d2 = am[i][2];
+        float d3 = am[i][3];
+        float d4 = am[i][4];
+        float d5 = am[i][5];
+        float d6 = am[i][6];
+        float d7 = am[i][7];
+        float v0 = d1 + d2;
+        float v1 = d1 - d2;
+        float v2 = d3 + d4;
+        float v3 = d3 - d4;
+        float v4 = d5 + d6;
+        float v5 = d5 - d6;
+
+        m[0] = d0 + v0 + v2 + v4;
+        m[1] = v1 + 2 * v3 + 0.5 * v5;
+        m[2] = v0 + 4 * v2 + 0.25 * v4;
+        m[3] = v1 + 8 * v3 + 0.125 * v5;
+        m[4] = v0 + 16 * v2 + 0.0625 * v4;
+        m[5] = v1 + 32 * v3 + 0.03125 * v5 + d7;
       }
     }
   }
